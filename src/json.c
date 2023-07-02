@@ -1129,24 +1129,31 @@ json_rpc_send_callback (void *arg)
       _Bool use_malloc = true;
       int bytes_to_send = -1;
 #if JSON_HAS_DUMPB
-      // most messages will fit into our dump buffer, and thus
-      // can be serialized without additional dynamic memory allocations
-      const int header_offset
-	= sprintf (state->dump_buffer, "Content-Length: % 30d\r\n\r\n", 0);
-      const int bytes_left = DUMP_BUFFER_SIZE - 1 - header_offset;
-      bytes_to_send = json_dumpb (message, state->dump_buffer + header_offset,
-				  bytes_left, JSON_COMPACT | JSON_ENCODE_ANY);
+      const unsigned MAX_HEADER_LENGTH = 100;
+      // most messages will fit into our dump buffer, and thus can be
+      // serialized without additional dynamic memory allocations
+      const int bytes_left = DUMP_BUFFER_SIZE - 1 - MAX_HEADER_LENGTH;
+      char *const payload_beg = state->dump_buffer + MAX_HEADER_LENGTH;
+      bytes_to_send = json_dumpb (message, payload_beg, bytes_left,
+				  JSON_COMPACT | JSON_ENCODE_ANY);
       if (bytes_to_send > 0 && bytes_to_send <= bytes_left)
 	{
 	  use_malloc = false;
-	  state->dump_buffer[header_offset + bytes_to_send] = '\0';
-	  /* ugly: overwrite header template with actual message length */
-	  const char c = state->dump_buffer[header_offset];
-	  sprintf (state->dump_buffer, "Content-Length: % 30d\r\n\r\n",
-		   bytes_to_send);
-	  bytes_to_send += header_offset;
-	  state->dump_buffer[header_offset] = c;
-	  msg = state->dump_buffer;
+	  state->dump_buffer[MAX_HEADER_LENGTH + bytes_to_send] = '\0';
+	  char *p = payload_beg - 1;
+	  *p-- = '\n';
+	  *p-- = '\r';
+	  *p-- = '\n';
+	  *p-- = '\r';
+	  for (unsigned rem = bytes_to_send; rem != 0;)
+	    {
+	      *p-- = '0' + (rem % 10);
+	      rem /= 10;
+	    }
+	  const char *fieldname = "Content-Length: ";
+	  msg = p - strlen (fieldname) + 1;
+	  memcpy (msg, fieldname, strlen (fieldname));
+	  bytes_to_send += payload_beg - msg;
 	}
 #endif
       if (use_malloc)
